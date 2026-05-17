@@ -64,3 +64,4 @@ const res3 = await fetch('https://tu-api.railway.app/en-curso', {
 - uvicorn
 - pypdf
 - python-multipart
+# analisis-api
