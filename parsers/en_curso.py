@@ -93,15 +93,21 @@ MODELO200: list[tuple[str, str, str]] = [
     ("periodificaciones a corto plazo pasivo", "00250", "BS"),
     ("total patrimonio neto y pasivo", "00252", "BS"),
     # PyG
+    ("importe neto de la cifra de negocios", "00255", "PyG"),
+    ("variacion de existencias de productos terminados y en curso de fabricacion", "00258", "PyG"),
+    ("trabajos realizados por la empresa para su activo", "00259", "PyG"),
+    ("aprovisionamientos", "00260", "PyG"),
     ("importe neto de la cifra de negocios", "00261", "PyG"),
     ("ventas", "00760", "PyG"),
     ("prestaciones de servicios", "00761", "PyG"),
     ("variacion de existencias de productos terminados y en curso de fabricacion", "00262", "PyG"),
     ("trabajos realizados por la empresa para su activo", "00263", "PyG"),
     ("aprovisionamientos", "00264", "PyG"),
+    ("otros ingresos de explotacion", "00265", "PyG"),
     ("otros ingresos de explotacion", "00266", "PyG"),
     ("ingresos accesorios y otros de gestion corriente", "00267", "PyG"),
     ("subvenciones de explotacion incorporadas al resultado del ejercicio", "00268", "PyG"),
+    ("gastos de personal", "00270", "PyG"),
     ("gastos de personal", "00271", "PyG"),
     ("sueldos salarios y asimilados", "00273", "PyG"),
     ("cargas sociales", "00274", "PyG"),
@@ -111,6 +117,9 @@ MODELO200: list[tuple[str, str, str]] = [
     ("imputacion de subvenciones de inmovilizado no financiero y otras", "00279", "PyG"),
     ("excesos de provisiones", "00284", "PyG"),
     ("deterioro y resultado por enajenaciones del inmovilizado", "00285", "PyG"),
+    ("diferencia negativa de combinaciones de negocio", "00286", "PyG"),
+    ("otros resultados", "00287", "PyG"),
+    ("otros conceptos de explotacion", "00294", "PyG"),
     ("resultado de explotacion", "00296", "PyG"),
     ("ingresos financieros", "00297", "PyG"),
     ("gastos financieros", "00305", "PyG"),
@@ -124,7 +133,25 @@ MODELO200: list[tuple[str, str, str]] = [
     ("resultado del ejercicio procedente de operaciones continuadas", "00327", "PyG"),
     ("resultado del ejercicio procedente de operaciones interrumpidas", "00328", "PyG"),
     ("resultado de la cuenta de perdidas y ganancias", "00500", "PyG"),
+    ("resultado de actividades interrumpidas neto de impuestos", "00791", "PyG"),
+    ("ajustes por cambios de criterio contable y errores", "00925", "PyG"),
 ]
+
+ACTIVO_NO_CORRIENTE: list[tuple[str, str]] = [ "00101", "00102,00111,00115,00118,00126,00134,00135"]
+ACTIVO_CORRIENTE: list[tuple[str, str]] = [ "00136", "00137,00138,00149,00160,00168,00176,00177"]
+TOTAL_ACTIVO: list[tuple[str, str]] = [ "00180", "00101,00136"]
+
+PATRIMONIO_NETO: list[tuple[str, str]] = [ "00185", "00187,00190,00191,00194,00195,00198,00199,00200,00201,00202,00208,00209"]
+PASIVO_NO_CORRIENTE: list[tuple[str, str]] = [ "00210", "00780,00781,00211,00216,00223,00224,00225,00226,00227"]
+PASIVO_CORRIENTE: list[tuple[str, str]] = [ "00228", "00785,00786,00229,00230,00231,00238,00239,00250,00251"]
+TOTAL_PASIVO_Y_PATRIMONIO: list[tuple[str, str]] = [ "00252", "00185,00210,00228"]
+
+RESULTADO_EXPLOTACION: list[tuple[str, str]] = [ "00296", "00255,00258,00259,00260,00265,00270,00279,00284,00285,00286,00287,00791,00294,00925"]
+RESULTADO_FINANCIERO: list[tuple[str, str]] = [ "00324", "00297,00305,00309,00312,00313,00329"]
+
+RESULTADO_ANTES_IMPUESTOS: list[tuple[str, str]] = [ "00325", "00296,00324"]
+RESULTADO_EJERCICIO: list[tuple[str, str]] = [ "00327", "00325,00326"]
+
 
 
 def _normalize(text: str) -> str:
