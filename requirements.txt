@@ -1,6 +1,6 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
-pypdf==4.3.1
+pypdf==6.7.5
 pdfminer.six==20231228
 pdfplumber==0.11.4

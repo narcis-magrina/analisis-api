@@ -1,16 +1,17 @@
 from __future__ import annotations
 import re
-import subprocess
+from io import StringIO
 from pathlib import Path
 from typing import List, Dict
+from pdfminer.high_level import extract_text_to_fp
+from pdfminer.layout import LAParams
 
 
 def pdf_to_text(pdf_path: Path) -> str:
-    result = subprocess.run(
-        ["pdftotext", "-layout", str(pdf_path), "-"],
-        capture_output=True, check=True,
-    )
-    return result.stdout.decode("utf-8", errors="replace")
+    output = StringIO()
+    with open(pdf_path, "rb") as f:
+        extract_text_to_fp(f, output, laparams=LAParams(), output_type="text", codec="utf-8")
+    return output.getvalue()
 
 
 def extract_identificacion(pages: List[str]) -> Dict:

@@ -112,10 +112,10 @@ MODELO200: list[tuple[str, str, str]] = [
     ("sueldos salarios y asimilados", "00273", "PyG"),
     ("cargas sociales", "00274", "PyG"),
     ("provisiones gastos de personal", "00275", "PyG"),
-    ("otros gastos de explotacion", "00276", "PyG"),
-    ("amortizacion del inmovilizado", "00278", "PyG"),
-    ("imputacion de subvenciones de inmovilizado no financiero y otras", "00279", "PyG"),
-    ("excesos de provisiones", "00284", "PyG"),
+    ("otros gastos de explotacion", "00279", "PyG"),   # 00279 en Modelo 200 estándar
+    ("amortizacion del inmovilizado", "00284", "PyG"),
+    ("imputacion de subvenciones de inmovilizado no financiero y otras", "00278", "PyG"),  # código no mostrado en template
+    ("excesos de provisiones", "00285", "PyG"),
     ("deterioro y resultado por enajenaciones del inmovilizado", "00285", "PyG"),
     ("diferencia negativa de combinaciones de negocio", "00286", "PyG"),
     ("otros resultados", "00287", "PyG"),
@@ -124,8 +124,10 @@ MODELO200: list[tuple[str, str, str]] = [
     ("ingresos financieros", "00297", "PyG"),
     ("gastos financieros", "00305", "PyG"),
     ("variacion de valor razonable en instrumentos financieros", "00309", "PyG"),
+    ("variacion de valor razonable en instrumentos financiero", "00309", "PyG"),  # alias sin 's' (A3 ERP)
     ("diferencias de cambio", "00312", "PyG"),
     ("deterioro y resultado por enajenaciones de instrumentos financieros", "00313", "PyG"),
+    ("deterioro bajas y enajenaciones de instrumentos financieros", "00313", "PyG"),  # alias A3 ERP
     ("otros ingresos y gastos de caracter financiero", "00329", "PyG"),
     ("resultado financiero", "00324", "PyG"),
     ("resultado antes de impuestos", "00325", "PyG"),
@@ -135,7 +137,194 @@ MODELO200: list[tuple[str, str, str]] = [
     ("resultado de la cuenta de perdidas y ganancias", "00500", "PyG"),
     ("resultado de actividades interrumpidas neto de impuestos", "00791", "PyG"),
     ("ajustes por cambios de criterio contable y errores", "00925", "PyG"),
+    # Aliases cortos para encabezados de secciones usados en PDFs en curso
+    ("total activo", "00180", "BS"),
+    ("total patrimonio neto y pasivo", "00252", "BS"),
+    ("resultado del ejercicio", "00327", "PyG"),
 ]
+
+# ── Descripción canónica por código (para display en frontend) ────────────────
+DESCRIPTIONS_BY_CODE: dict[str, str] = {}
+for _desc, _code, _ in MODELO200:
+    if _code not in DESCRIPTIONS_BY_CODE:
+        DESCRIPTIONS_BY_CODE[_code] = _desc.capitalize()
+
+# ── Regexes para extracción de líneas de concepto ────────────────────────────
+_AMT_RE   = re.compile(r"-?[\d]{1,3}(?:\.[\d]{3})*,\d{2}")
+# Línea de detalle contable: empieza por importe + código de cuenta (3-9 dígitos + separador)
+_ACCT_RE  = re.compile(r"^-?[\d]{1,3}(?:\.[\d]{3})*,\d{2}\s+\d{3,9}\s*[-,]")
+# Línea TOTAL invertida: dos importes al principio + descripción al final
+_REV_RE   = re.compile(r"^(-?[\d]{1,3}(?:\.[\d]{3})*,\d{2})\s+(-?[\d]{1,3}(?:\.[\d]{3})*,\d{2})\s+(.+)$")
+
+_BS_KW  = ["activo no corriente", "activo corriente", "total activo",
+           "patrimonio neto", "pasivo no corriente", "pasivo corriente",
+           "balance de situacion", "inmovilizado", "fondos propios"]
+_PYG_KW = ["perdidas y ganancias", "cuenta de perdidas", "gastos de personal",
+           "aprovisionamientos", "cifra de negocios", "resultado de explotacion",
+           "resultado financiero", "resultado antes de impuestos"]
+
+
+def detect_section(text: str) -> str:
+    """Devuelve 'BS' o 'PyG' según las palabras clave presentes en el texto."""
+    norm = _normalize(text)
+    bs  = sum(1 for kw in _BS_KW  if kw in norm)
+    pyg = sum(1 for kw in _PYG_KW if kw in norm)
+    return "BS" if bs >= pyg else "PyG"
+
+
+def extract_period(text: str) -> tuple[str, str]:
+    """Extrae (año, mes) del primer rango de fechas en la cabecera del PDF."""
+    m = re.search(r"\b(\d{2})/(\d{2})/(\d{4})\b.*?\b(\d{2})/(\d{2})/(\d{4})\b", text[:600])
+    if m:
+        return m.group(6), m.group(5)  # año y mes de la fecha de cierre
+    m = re.search(r"\b(\d{2})/(\d{2})/(\d{4})\b", text[:600])
+    if m:
+        return m.group(3), m.group(2)
+    return "", ""
+
+
+def _clean_concept_keep_prefix(raw: str) -> str:
+    """Elimina importes y códigos contables pero MANTIENE el prefijo (b), 11., etc.)"""
+    desc = _AMT_RE.sub("", raw).strip()
+    desc = re.sub(r"\b\d{3,9}\s*[-,]\s*", "", desc)
+    desc = re.sub(r"\s*\([A-Za-z0-9+\s]{1,30}\)\s*$", "", desc)
+    return re.sub(r"\s+", " ", desc).strip()
+
+
+def _clean_concept_desc(raw: str) -> str:
+    """Elimina importes, códigos contables y prefijos de numeración."""
+    desc = _AMT_RE.sub("", raw).strip()
+    desc = re.sub(r"\b\d{3,9}\s*[-,]\s*", "", desc)   # códigos contables
+    desc = re.sub(r"\s+", " ", desc).strip()
+    # Prefijos: A), B), A-1), I., II., 1., a)
+    desc = re.sub(r"^[A-Z]-?\d*\)\s*", "", desc)
+    desc = re.sub(r"^[IVXivx]+\.\s*", "", desc)
+    desc = re.sub(r"^\d+\.\s*", "", desc)
+    desc = re.sub(r"^[a-z]\)\s*", "", desc)
+    # Fórmulas al final: (A+B), (14+15+16)
+    desc = re.sub(r"\s*\([A-Za-z0-9+\s]{1,30}\)\s*$", "", desc)
+    return re.sub(r"\s+", " ", desc).strip()
+
+
+def _parse_amt(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    try:
+        return float(raw.replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def extract_concept_lines(text: str) -> list[dict]:
+    """
+    Extrae líneas de concepto (nivel sección) saltando las de detalle contable.
+    Devuelve lista de dicts con desc_original, desc_clean, importe_actual_raw,
+    importe_anterior_raw.
+    """
+    result = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if len(line) < 5:
+            continue
+        if _ACCT_RE.match(line):
+            continue  # línea de detalle contable
+
+        # Formato invertido: IMPORTE IMPORTE DESCRIPCIÓN (líneas TOTAL)
+        m = _REV_RE.match(line)
+        if m:
+            desc_part = m.group(3).strip()
+            if not re.match(r"^\d{3,9}[\s,-]", desc_part):
+                dc = _clean_concept_desc(desc_part)
+                if len(dc) >= 3:
+                    result.append({"desc_original": line,
+                                   "desc_con_prefijo": _clean_concept_keep_prefix(desc_part),
+                                   "desc_clean": dc,
+                                   "importe_actual_raw": m.group(1),
+                                   "importe_anterior_raw": m.group(2)})
+                continue
+
+        # Formato normal: DESCRIPCIÓN IMPORTE [IMPORTE …]
+        amounts = _AMT_RE.findall(line)
+        if not amounts:
+            continue
+        # Preferir importes con separador de miles (son monetarios, no porcentajes)
+        monetary = [a for a in amounts if "." in a] or amounts
+        dc = _clean_concept_desc(line)
+        if len(dc) < 3:
+            continue
+        result.append({"desc_original": line,
+                        "desc_con_prefijo": _clean_concept_keep_prefix(line),
+                        "desc_clean": dc,
+                        "importe_actual_raw": monetary[0],
+                        "importe_anterior_raw": monetary[1] if len(monetary) > 1 else None})
+    return result
+
+
+def get_labels(seccion: str) -> dict[str, str]:
+    """Devuelve {codigo: descripcion} para todos los códigos de la sección."""
+    seen: dict[str, str] = {}
+    for desc, code, sec in MODELO200:
+        if sec == seccion and code not in seen:
+            seen[code] = desc.capitalize()
+    return seen
+
+
+def parse_en_curso_auto(text: str, pdf_name: str, ejercicio: str = "", mes: str = "") -> dict:
+    """
+    Pipeline completo para PDFs en curso:
+    1. Detecta sección (BS/PyG)
+    2. Extrae líneas de concepto
+    3. Fuzzy-match con MODELO200
+    4. Devuelve matched + unmatched
+    """
+    if not ejercicio:
+        ejercicio, mes = extract_period(text)
+    seccion = detect_section(text)
+    lines   = extract_concept_lines(text)
+
+    matched: list[dict]   = []
+    unmatched: list[dict] = []
+    seen: set[str]        = set()
+    last_code             = ""
+
+    for idx, item in enumerate(lines):
+        desc_norm = _normalize(item["desc_clean"])
+        codigo    = _find_codigo(desc_norm, last_code, seccion)
+        imp_a     = _parse_amt(item["importe_actual_raw"])
+        imp_p     = _parse_amt(item.get("importe_anterior_raw"))
+
+        if codigo != "?" and codigo not in seen:
+            seen.add(codigo)
+            last_code = codigo
+            matched.append({
+                "codigo":               codigo,
+                "descripcion_modelo":   DESCRIPTIONS_BY_CODE.get(codigo, item["desc_clean"].capitalize()),
+                "descripcion_pdf":      item.get("desc_con_prefijo", item["desc_clean"]),
+                "descripcion_original": item["desc_original"],
+                "importe_actual":       imp_a,
+                "importe_anterior":     imp_p,
+                "seccion":              seccion,
+            })
+        else:
+            if imp_a is not None and imp_a != 0.0:
+                unmatched.append({
+                    "id":                   f"u{idx}",
+                    "desc_con_prefijo":     item.get("desc_con_prefijo", item["desc_clean"]),
+                    "desc_clean":           item["desc_clean"],
+                    "descripcion_original": item["desc_original"],
+                    "importe_actual":       imp_a,
+                    "importe_anterior":     imp_p,
+                })
+
+    return {
+        "seccion":   seccion,
+        "ejercicio": ejercicio,
+        "mes":       mes,
+        "pdf_nombre": pdf_name,
+        "labels":    get_labels(seccion),
+        "matched":   matched,
+        "unmatched": unmatched,
+    }
 
 ACTIVO_NO_CORRIENTE: list[tuple[str, str]] = [ "00101", "00102,00111,00115,00118,00126,00134,00135"]
 ACTIVO_CORRIENTE: list[tuple[str, str]] = [ "00136", "00137,00138,00149,00160,00168,00176,00177"]
@@ -171,14 +360,14 @@ def _find_codigo(desc_norm: str, last_code: str = "", seccion: str = "") -> str:
     for key, code, sec in MODELO200:
         if seccion and sec and sec != seccion:
             continue
-        clean_key = re.sub(r" (lp|cp)$", "", key)
+        clean_key = _normalize(re.sub(r" (lp|cp)$", "", key))
         if clean_key in desc_norm and len(clean_key) > best_len:
             best_len = len(clean_key)
 
     for key, code, sec in MODELO200:
         if seccion and sec and sec != seccion:
             continue
-        clean_key = re.sub(r" (lp|cp)$", "", key)
+        clean_key = _normalize(re.sub(r" (lp|cp)$", "", key))
         if clean_key in desc_norm and len(clean_key) == best_len:
             candidates.append((key, code))
 

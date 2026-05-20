@@ -8,8 +8,11 @@ try:
 except ImportError:
     pdfplumber = None  # type: ignore
 
-AMOUNT_RE  = re.compile(r'^-?[\d]{1,3}(?:\.\d{3})*,\d{2}$')
-CODE_RE    = re.compile(r'^0{2}(\d{3})$')
+AMOUNT_RE    = re.compile(r'^-?[\d]{1,3}(?:\.\d{3})*,\d{2}$')
+CODE_RE      = re.compile(r'^0{2}(\d{3})$')
+NIF_CELL_RE  = re.compile(r'^[A-Z0-9]\d{7}[A-Z0-9]$')
+AMT_CELL_RE  = re.compile(r'^\d{1,3}(?:\.\d{3})*,\d{2}$')
+CODIGO_RE    = re.compile(r'^\d{1,3}$')  # código provincia/país (entero suelto)
 YEAR_RE    = re.compile(r'\b(19\d{2}|20\d{2})\b')
 NIF_RE     = re.compile(r'\b([A-Z]\d{7}[A-Z0-9])\b')
 # Header presente en cada página del formulario: "200 B61174298 PROMO CIMA SL Página N"
@@ -189,6 +192,100 @@ def parse_tables_json(data: dict, filename: str = "") -> tuple[list[list], dict]
                 ]
 
     return list(seen.values()), info
+
+
+def _parse_socio_row(cells: list[str]) -> dict | None:
+    """
+    Extrae un socio del cuadro B.2 (Participaciones de personas o entidades en la
+    declarante) de una fila de tabla pdfplumber.
+
+    Exige la estructura completa del cuadro para descartar filas de otros cuadros
+    (administradores -sin importes-, B.1 -participaciones en otras entidades-):
+      NIF + indicador F/J + nombre/razón social + código provincia/país +
+      nominal + % de participación.
+    La columna RPTE (representante) puede ir vacía.
+    """
+    if len(cells) < 5:
+        return None
+
+    # NIF en las primeras 3 columnas (puede haber un nº de fila antes)
+    nif = None
+    nif_idx = None
+    for i, c in enumerate(cells[:3]):
+        if NIF_CELL_RE.match(c):
+            nif = c
+            nif_idx = i
+            break
+    if nif is None:
+        return None
+
+    after = cells[nif_idx + 1:]
+
+    # Indicador F/J obligatorio
+    if not any(c in ("F", "J") for c in after):
+        return None
+
+    # Importes con decimales: nominal y % (los dos últimos)
+    amounts = [c for c in after if AMT_CELL_RE.match(c)]
+    if len(amounts) < 2:
+        return None
+
+    # Código provincia/país obligatorio: entero suelto (sin decimales)
+    if not any(CODIGO_RE.match(c) for c in after):
+        return None
+
+    # Nombre: primer texto tras el NIF que no sea F/J, ni importe, ni código
+    nombre = ""
+    for c in after:
+        if not c or c in ("F", "J") or AMT_CELL_RE.match(c) or CODIGO_RE.match(c):
+            continue
+        nombre = c
+        break
+    if not nombre:
+        return None
+
+    try:
+        pct = float(amounts[-1].replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+    if not (0 < pct <= 100):
+        return None
+
+    return {
+        "nif":               nif,
+        "nombre":            nombre,
+        "nominal":           amounts[-2],
+        "participacion_pct": pct,
+    }
+
+
+def extract_socios_from_json(data: dict) -> list[dict]:
+    """Extrae socios del JSON producido por /inspeccionar-tablas."""
+    socios = []
+    for pg in data.get("paginas", []):
+        for tabla in pg.get("tablas", []):
+            for row in tabla.get("filas_data", []):
+                cells = [str(c).strip() if c is not None else "" for c in row]
+                s = _parse_socio_row(cells)
+                if s:
+                    socios.append(s)
+    return socios
+
+
+def extract_socios_from_pdf(pdf_path: Path) -> list[dict]:
+    """Extrae socios directamente de un PDF del Modelo 200."""
+    if pdfplumber is None:
+        raise ImportError("pdfplumber is not installed")
+    socios = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            for tabla in (page.extract_tables() or []):
+                for row in (tabla or []):
+                    cells = [str(c).strip() if c is not None else "" for c in row]
+                    s = _parse_socio_row(cells)
+                    if s:
+                        socios.append(s)
+    return socios
 
 
 def process_pdf(pdf_path: Path) -> tuple[list[list], dict]:

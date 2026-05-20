@@ -13,8 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import tempfile, shutil
 from pathlib import Path
 
-from parsers.mod200_plumber import process_pdf as parse_mod200, parse_tables_json
-from parsers.en_curso import extract_text, parse_lines
+from parsers.mod200_plumber import (
+    process_pdf as parse_mod200,
+    parse_tables_json,
+    extract_socios_from_pdf,
+    extract_socios_from_json,
+)
+from parsers.en_curso import extract_text, parse_lines, parse_en_curso_auto
 from parsers.info_empresa import process_pdf as parse_info_empresa
 
 app = FastAPI(title="Analisis Empresas API", version="1.0.0")
@@ -104,6 +109,35 @@ async def en_curso(
     }
 
 
+@app.post("/analizar-en-curso-auto")
+async def analizar_en_curso_auto(
+    file: UploadFile = File(...),
+    ejercicio: str = "",
+    mes: str = "",
+):
+    """
+    Recibe un PDF de balance o PyG en curso, detecta automáticamente la sección,
+    extrae líneas de concepto, hace fuzzy-match con MODELO200 y devuelve
+    matched + unmatched.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Solo se aceptan ficheros PDF")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+
+    try:
+        text   = extract_text(tmp_path)
+        result = parse_en_curso_auto(text, file.filename or "", ejercicio, mes)
+    except Exception as e:
+        raise HTTPException(500, f"Error procesando PDF: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return result
+
+
 @app.post("/inspeccionar-tablas")
 async def inspeccionar_tablas(file: UploadFile = File(...)):
     """
@@ -168,6 +202,7 @@ async def analizar_json(body: TablesJson):
         "total": len(rows),
         "nif_empresa":  info.get("nif", ""),
         "razon_social": info.get("razon_social", ""),
+        "socios": extract_socios_from_json(body.dict()),
         "filas": [
             {
                 "ejercicio": r[0], "pdf": r[1], "pagina": r[2],
@@ -177,6 +212,29 @@ async def analizar_json(body: TablesJson):
             for r in rows
         ],
     }
+
+
+@app.post("/extraer-socios")
+async def extraer_socios(file: UploadFile = File(...)):
+    """
+    Recibe un PDF del Modelo 200 y devuelve los socios de la sección B.2
+    (NIF, nombre, participación nominal en € y porcentaje).
+    """
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(400, "Solo se aceptan ficheros PDF")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+
+    try:
+        socios = extract_socios_from_pdf(tmp_path)
+    except Exception as e:
+        raise HTTPException(500, f"Error procesando PDF: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return {"socios": socios}
 
 
 @app.post("/info-empresa")
