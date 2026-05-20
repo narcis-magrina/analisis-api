@@ -114,12 +114,11 @@ MODELO200: list[tuple[str, str, str]] = [
     ("provisiones gastos de personal", "00275", "PyG"),
     ("otros gastos de explotacion", "00279", "PyG"),   # 00279 en Modelo 200 estándar
     ("amortizacion del inmovilizado", "00284", "PyG"),
-    ("imputacion de subvenciones de inmovilizado no financiero y otras", "00278", "PyG"),  # código no mostrado en template
-    ("excesos de provisiones", "00285", "PyG"),
-    ("deterioro y resultado por enajenaciones del inmovilizado", "00285", "PyG"),
-    ("diferencia negativa de combinaciones de negocio", "00286", "PyG"),
-    ("otros resultados", "00287", "PyG"),
-    ("otros conceptos de explotacion", "00294", "PyG"),
+    ("imputacion de subvenciones de inmovilizado no financiero y otras", "00285", "PyG"),  # código no mostrado en template
+    ("excesos de provisiones", "00286", "PyG"),
+    ("deterioro y resultado por enajenaciones del inmovilizado", "00287", "PyG"),
+    ("diferencia negativa de combinaciones de negocio", "00294", "PyG"),
+    ("otros resultados", "00295", "PyG"),
     ("resultado de explotacion", "00296", "PyG"),
     ("ingresos financieros", "00297", "PyG"),
     ("gastos financieros", "00305", "PyG"),
