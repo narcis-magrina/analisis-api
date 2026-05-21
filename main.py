@@ -19,7 +19,7 @@ from parsers.mod200_plumber import (
     extract_socios_from_pdf,
     extract_socios_from_json,
 )
-from parsers.en_curso import extract_text, parse_lines, parse_en_curso_auto
+from parsers.en_curso import extract_text, parse_lines, parse_en_curso_auto, is_two_column_bs, parse_two_column_bs
 from parsers.info_empresa import process_pdf as parse_info_empresa
 
 app = FastAPI(title="Analisis Empresas API", version="1.0.0")
@@ -128,8 +128,11 @@ async def analizar_en_curso_auto(
         tmp_path = Path(tmp.name)
 
     try:
-        text   = extract_text(tmp_path)
-        result = parse_en_curso_auto(text, file.filename or "", ejercicio, mes)
+        text = extract_text(tmp_path)
+        if is_two_column_bs(text):
+            result = parse_two_column_bs(tmp_path, file.filename or "", ejercicio, mes)
+        else:
+            result = parse_en_curso_auto(text, file.filename or "", ejercicio, mes)
     except Exception as e:
         raise HTTPException(500, f"Error procesando PDF: {e}")
     finally:

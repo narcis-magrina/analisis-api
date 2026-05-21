@@ -171,6 +171,165 @@ def detect_section(text: str) -> str:
     return "BS" if bs >= pyg else "PyG"
 
 
+def is_two_column_bs(text: str) -> bool:
+    """Detecta si el balance tiene activo y pasivo en columnas paralelas."""
+    for line in text.splitlines():
+        n = _normalize(line)
+        # Cabecera duplicada: "Descripción 2025 Descripción 2025"
+        if n.count("descripcion") >= 2:
+            return True
+        # Marcadores de activo Y pasivo/patrimonio en la misma línea
+        has_activo = any(kw in n for kw in ["activo no corriente", "activo corriente", "total activo"])
+        has_pasivo = any(kw in n for kw in ["patrimonio neto", "pasivo no corriente", "pasivo corriente", "fondos propios"])
+        if has_activo and has_pasivo:
+            return True
+    return False
+
+
+def _find_column_split(by_y: dict, page_width: float) -> float:
+    """
+    Detecta el punto x que separa la columna izquierda (Activo) de la derecha (Pasivo).
+
+    Estrategia: en un balance de dos columnas cada fila sigue el patrón
+    "texto … cifra … texto … cifra". El x0 del primer texto que aparece
+    después de una cifra indica el margen izquierdo de la columna derecha.
+    Complementariamente se recogen los x0 de palabras precedidas por un
+    hueco horizontal > 20 pt. Se clusterizan ambos conjuntos y se toma
+    el bin más frecuente.
+    """
+    candidates: list[float] = []
+
+    for ws in by_y.values():
+        ws_s = sorted(ws, key=lambda w: float(w["x0"]))
+
+        # Patrón texto→cifra→texto: x0 del texto post-cifra
+        saw_number = False
+        for w in ws_s:
+            is_num = bool(AMOUNT_RE.match(w["text"]))
+            if saw_number and not is_num:
+                candidates.append(float(w["x0"]))
+                break
+            if is_num:
+                saw_number = True
+
+        # Hueco grande (>20 pt) seguido de texto (no cifra): separa columnas
+        for i in range(len(ws_s) - 1):
+            gap = float(ws_s[i + 1]["x0"]) - float(ws_s[i]["x1"])
+            if gap > 20 and not AMOUNT_RE.match(ws_s[i + 1]["text"]):
+                candidates.append(float(ws_s[i + 1]["x0"]))
+
+    if not candidates:
+        return page_width / 2
+
+    # Clustering en bins de 20 pt
+    bins: dict[int, int] = {}
+    for x in candidates:
+        b = round(x / 20) * 20
+        bins[b] = bins.get(b, 0) + 1
+
+    best_bin = max(bins, key=lambda b: bins[b])
+    best_vals = [x for x in candidates if abs(x - best_bin) <= 20]
+    split = sum(best_vals) / len(best_vals)
+
+    # Sanity check: el split no debe estar en los extremos de la página
+    if not (page_width * 0.1 < split < page_width * 0.9):
+        return page_width / 2
+
+    return split
+
+
+def _extract_columns_plumber(pdf_path: Path) -> tuple[str, str]:
+    """Usa pdfplumber para separar el texto de la columna izquierda (Activo)
+    y la derecha (Pasivo/Patrimonio) en un balance de dos columnas."""
+    import pdfplumber
+    from collections import defaultdict
+
+    left_lines:  list[str] = []
+    right_lines: list[str] = []
+
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(x_tolerance=3, y_tolerance=3)
+            if not words:
+                continue
+
+            # Agrupar palabras por línea (misma y aproximada)
+            by_y: dict[int, list] = defaultdict(list)
+            for w in words:
+                y_key = round(float(w["top"]) / 4) * 4
+                by_y[y_key].append(w)
+
+            # Detectar dinámicamente el punto de separación de columnas
+            mid = _find_column_split(by_y, page.width)
+
+            for y in sorted(by_y):
+                ws = sorted(by_y[y], key=lambda w: float(w["x0"]))
+                left  = " ".join(w["text"] for w in ws if float(w["x0"]) <  mid)
+                right = " ".join(w["text"] for w in ws if float(w["x0"]) >= mid)
+                if left.strip():
+                    left_lines.append(left)
+                if right.strip():
+                    right_lines.append(right)
+
+    return "\n".join(left_lines), "\n".join(right_lines)
+
+
+def parse_two_column_bs(pdf_path: Path, pdf_name: str, ejercicio: str = "", mes: str = "") -> dict:
+    """Parser para balances con Activo | Pasivo en columnas paralelas."""
+    left_text, right_text = _extract_columns_plumber(pdf_path)
+
+    # Extraer periodo de la cabecera (aparece en ambas columnas; basta con una)
+    if not ejercicio:
+        ejercicio, mes = extract_period(left_text + "\n" + right_text)
+
+    # Procesar primero activo (izquierda) y luego pasivo+patrimonio (derecha)
+    all_lines = extract_concept_lines(left_text) + extract_concept_lines(right_text)
+
+    matched:   list[dict] = []
+    unmatched: list[dict] = []
+    seen:      set[str]   = set()
+    last_code             = ""
+
+    for idx, item in enumerate(all_lines):
+        desc_norm = _normalize(item["desc_clean"])
+        codigo    = _find_codigo(desc_norm, last_code, "BS")
+        imp_a     = _parse_amt(item["importe_actual_raw"])
+        imp_p     = _parse_amt(item.get("importe_anterior_raw"))
+
+        if codigo != "?" and codigo not in seen:
+            seen.add(codigo)
+            last_code = codigo
+            matched.append({
+                "codigo":               codigo,
+                "descripcion_modelo":   DESCRIPTIONS_BY_CODE.get(codigo, item["desc_clean"].capitalize()),
+                "descripcion_pdf":      item.get("desc_con_prefijo", item["desc_clean"]),
+                "descripcion_original": item["desc_original"],
+                "importe_actual":       imp_a,
+                "importe_anterior":     imp_p,
+                "seccion":              "BS",
+            })
+        else:
+            if imp_a is not None and imp_a != 0.0:
+                unmatched.append({
+                    "id":                   f"u{idx}",
+                    "desc_con_prefijo":     item.get("desc_con_prefijo", item["desc_clean"]),
+                    "desc_clean":           item["desc_clean"],
+                    "descripcion_original": item["desc_original"],
+                    "importe_actual":       imp_a,
+                    "importe_anterior":     imp_p,
+                })
+
+    return {
+        "seccion":    "BS",
+        "ejercicio":  ejercicio,
+        "mes":        mes,
+        "pdf_nombre": pdf_name,
+        "labels":     get_labels("BS"),
+        "matched":    matched,
+        "unmatched":  unmatched,
+    }
+
+
 def extract_period(text: str) -> tuple[str, str]:
     """Extrae (año, mes) del primer rango de fechas en la cabecera del PDF."""
     m = re.search(r"\b(\d{2})/(\d{2})/(\d{4})\b.*?\b(\d{2})/(\d{2})/(\d{4})\b", text[:600])
